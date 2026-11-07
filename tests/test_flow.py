@@ -69,4 +69,31 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(result.json()['duplicates'],1)
         self.assertIn('company,title,url',self.send('GET','/api/export/csv',token=t).text)
 
+    def test_security_and_account_lifecycle(self):
+        email='security@example.com';password='this-is-a-strong-password'
+        reg=self.send('POST','/api/auth/register',{'email':email,'password':password})
+        self.assertEqual(reg.status_code,200)
+        token=reg.json()['token']
+        self.assertEqual(reg.headers['x-content-type-options'],'nosniff')
+        self.assertIn("script-src 'self'",reg.headers['content-security-policy'])
+        self.assertEqual(reg.headers['x-frame-options'],'DENY')
+        for _ in range(5):
+            r=self.send('POST','/api/auth/login',{'email':email,'password':'wrong-password'})
+            self.assertEqual(r.status_code,401,r.text)
+        r=self.send('POST','/api/auth/login',{'email':email,'password':password})
+        self.assertEqual(r.status_code,429,'A correct password must not bypass rate limiting')
+        self.assertEqual(self.send('DELETE','/api/account',{'password':password,'confirm':'not yet'},token).status_code,400)
+        self.assertEqual(self.send('DELETE','/api/account',{'password':password,'confirm':'DELETE MY ACCOUNT'},token).status_code,200)
+        self.assertEqual(self.send('GET','/api/settings',token=token).status_code,401)
+
+    def test_pilot_signup_switch_and_untrusted_host(self):
+        os.environ['ALLOW_PUBLIC_SIGNUP']='0'
+        try:
+            r=self.send('POST','/api/auth/register',{'email':'blocked@example.com','password':'sufficient-password'})
+            self.assertEqual(r.status_code,403)
+        finally:
+            os.environ.pop('ALLOW_PUBLIC_SIGNUP',None)
+        result=self.client.get('/health',headers={'host':'malicious.example'})
+        self.assertEqual(result.status_code,400)
+
 if __name__=='__main__':unittest.main()
