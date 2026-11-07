@@ -14,7 +14,7 @@ External sources and language-model output are untrusted. Before submitting to a
 
 ## Current limitations and commercial production requirements
 
-This is a functional self-hosted alpha, not a completed subscription SaaS. Before public hosting, add email verification, password reset, session management, rate limiting, audit retention, encrypted credentials, managed backup/restore, secure HTTP headers, observability, tenant billing, abuse prevention, privacy policy/terms, data export/delete, tested migrations, and integration-specific legal compliance. Docker maps to localhost only by default. Deploy behind HTTPS when production-ready.
+This is a functional self-hosted alpha, not a completed subscription SaaS. The current security phase adds persistent login throttling, security headers, session revocation, account deletion, operator provisioning, a consistent backup utility, and an HTTPS pilot Compose recipe. Before inviting public users, still add email verification, password recovery, secrets management, automated off-host backup/restore, observability, tenant billing, abuse controls, privacy policy/terms, tested migrations, and integration-specific legal compliance. Local Compose maps to localhost by default; production Compose publishes only the HTTPS proxy and disables public registration.
 
 ## Monetization options
 
