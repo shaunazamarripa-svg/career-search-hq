@@ -10,8 +10,8 @@ An open-source, self-hosted job-search command center with user-owned data and a
 - Applications and recruiter messages with **separate explicit approvals**
 - No fabricated submission receipts: approval does not equal sending
 - Contact records, follow-up due dates, outcome metrics, append-only events
-- CSV import/export and Greenhouse board job ingestion (board identifiers provided by user)
-- Unattended Greenhouse discovery worker for opt-in employer board lists (`python agent.py`, schedule with cron)
+- CSV import/export plus public Greenhouse, Lever, and Ashby employer job-board ingestion (board identifiers provided by user)
+- Unattended discovery worker for opt-in employer board lists (`python agent.py`, schedule with cron)
 - Generated weekly scorecard, overdue reminders, and read-only agent API
 - Local MCP bridge exposing account-scoped job reading, opportunity intake, draft preparation and weekly review
 
@@ -53,6 +53,8 @@ After registering, a bearer token is issued in `/api/auth/register`; login at `/
 | `POST /api/import/csv` | CSV upsert |
 | `GET /api/export/csv` | CSV export |
 | `POST /api/discovery/greenhouse` | Employer board discovery |
+| `POST /api/discovery/ats/lever` | Public Lever employer board discovery |
+| `POST /api/discovery/ats/ashby` | Public Ashby employer board discovery |
 | `POST /api/discovery/run` | Trigger configured board scans |
 | `GET /api/agents/runs` | Scan evidence, errors and counts |
 
@@ -60,7 +62,7 @@ All mutable records belong to the authenticated account. See `tests/test_flow.py
 
 ## Run the agents
 
-In Search Criteria, add the Greenhouse board IDs for employers you want to follow. Start a manual scan from Data Portability or schedule the command below on your own host (for example, a daily `cron` entry):
+In Search Criteria, add the Greenhouse, Lever, or Ashby company board IDs for employers you want to follow. Start a manual scan from Data Portability or schedule the command below on your own host (for example, a daily `cron` entry). These are official public employer listings, not a universal search of every job board. Publication dates and compensation may be unavailable; missing information stays unverified.
 
 ```bash
 python agent.py
