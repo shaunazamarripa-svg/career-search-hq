@@ -45,7 +45,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 app.add_middleware(SecurityHeadersMiddleware)
 
 DEFAULT_WEIGHTS = {'title':25, 'pay':20, 'location':15, 'skills':15, 'leadership':15, 'freshness':10}
-DEFAULT_SETTINGS = {'titles':[], 'min_salary':0, 'ideal_salary':0, 'work_modes':['remote','hybrid','onsite'], 'location':'', 'max_travel':100, 'exclusions':[], 'skills':[], 'greenhouse_boards':[], 'weights':DEFAULT_WEIGHTS}
+DEFAULT_SETTINGS = {'titles':[], 'min_salary':0, 'ideal_salary':0, 'work_modes':['remote','hybrid','onsite'], 'location':'', 'max_travel':100, 'exclusions':[], 'skills':[], 'greenhouse_boards':[], 'lever_sites':[], 'ashby_boards':[], 'weights':DEFAULT_WEIGHTS}
 VALID_STATES = ['discovered','verified','shortlisted','draft_ready','approval_pending','approved','submitted','interview','offer','rejected','withdrawn']
 NEXT_STATES = {
     'discovered':{'verified','rejected','withdrawn'},
@@ -93,7 +93,7 @@ init_db()
 def now():return datetime.now(timezone.utc).isoformat()
 def error(status,msg):raise HTTPException(status_code=status,detail=msg)
 def asdict(row):return dict(row) if row else None
-def json_settings(row):return json.loads(row['settings'])
+def json_settings(row):return {**DEFAULT_SETTINGS,**json.loads(row['settings'])}
 def audit(con,uid,kind,job_id=None,**details):con.execute('INSERT INTO events(user_id,job_id,kind,details,occurred_at) VALUES(?,?,?,?,?)',(uid,job_id,kind,json.dumps(details),now()))
 def hash_password(password,salt=None):
     salt=salt or secrets.token_hex(16)
@@ -212,11 +212,13 @@ def set_settings(data:dict[str,Any],authorization:str|None=Header(None)):
     if set(data)-allowed:error(400,'Unknown settings field')
     with db() as con:
         original=json_settings(con.execute('SELECT settings FROM users WHERE id=?',(uid,)).fetchone())
-        original.update(data)
+        original={**DEFAULT_SETTINGS,**original,**data}
         weights=original['weights']
         if set(weights)!=set(DEFAULT_WEIGHTS) or sum(weights.values())!=100 or any(type(v)!=int or v<0 for v in weights.values()):error(400,'Scoring weights must be nonnegative integers totaling 100')
         if not isinstance(original['titles'],list) or not isinstance(original['skills'],list):error(400,'Titles and skills must be lists')
-        if not isinstance(original['greenhouse_boards'],list) or len(original['greenhouse_boards'])>30 or any(not isinstance(b,str) or not re.fullmatch(r'[a-zA-Z0-9_-]+',b) for b in original['greenhouse_boards']):error(400,'Invalid employer board list')
+        for field in ('greenhouse_boards','lever_sites','ashby_boards'):
+            boards=original[field]
+            if not isinstance(boards,list) or len(boards)>30 or any(not isinstance(b,str) or not re.fullmatch(r'[a-zA-Z0-9_-]+',b) for b in boards):error(400,'Invalid employer board list')
         if original['min_salary']<0 or not 0<=original['max_travel']<=100:error(400,'Invalid salary/travel settings')
         con.execute('UPDATE users SET settings=? WHERE id=?',(json.dumps(original),uid))
         audit(con,uid,'settings_updated')
@@ -484,49 +486,83 @@ def export_csv(authorization:str|None=Header(None)):
 class BoardInput(BaseModel):
     board:str=Field(min_length=1,max_length=100)
 
-def scan_greenhouse(con,uid,board):
-    if not re.fullmatch(r'[a-zA-Z0-9_-]+',board):error(400,'Invalid board identifier')
-    url=f'https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true'
+def board_payload(url):
+    """Fetch only our fixed, public ATS endpoint URLs; never fetch user-supplied URLs."""
     try:
-        req=urllib.request.Request(url,headers={'User-Agent':'CareerSearchHQ/0.1'})
+        req=urllib.request.Request(url,headers={'User-Agent':'CareerSearchHQ/0.2','Accept':'application/json'})
         with urllib.request.urlopen(req,timeout=12) as response:
             raw=response.read(4_000_001)
             if len(raw)>4_000_000:error(400,'Board feed too large')
-            payload=json.loads(raw)
-    except Exception:error(502,'Board unavailable or returned invalid data')
-    created=0;duplicates=0
-    for item in payload.get('jobs',[])[:500]:
+            return json.loads(raw)
+    except HTTPException:raise
+    except (OSError,ValueError,TypeError):error(502,'Board unavailable or returned invalid data')
+
+def import_feed(con,uid,items,source,transform):
+    created=duplicates=invalid=0
+    for item in items[:500]:
         try:
-            fields={'company':board,'title':item['title'],'url':item['absolute_url'],'source':'greenhouse:'+board,'posted_at':item.get('updated_at'),'location':item.get('location',{}).get('name'),'description':re.sub('<[^>]+>',' ',item.get('content',''))[:15000]}
-            res=upsert_job(con,uid,fields)
-            created+=res['created'];duplicates+=not res['created']
-        except Exception:continue
-    return {'created':created,'duplicates':duplicates,'source':url}
+            fields=transform(item)
+            result=upsert_job(con,uid,fields)
+            created+=int(result['created']);duplicates+=int(not result['created'])
+        except (KeyError,TypeError,ValueError,HTTPException):invalid+=1
+    return {'created':created,'duplicates':duplicates,'invalid':invalid,'source':source}
+
+def validate_board(board):
+    if not re.fullmatch(r'[a-zA-Z0-9_-]+',board):error(400,'Invalid board identifier')
+
+def scan_greenhouse(con,uid,board):
+    validate_board(board)
+    url=f'https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true'
+    payload=board_payload(url)
+    return import_feed(con,uid,payload.get('jobs',[]),url,lambda item:{'company':board,'title':item['title'],'url':item['absolute_url'],'source':'greenhouse:'+board,'posted_at':item.get('updated_at'),'location':(item.get('location') or {}).get('name'),'description':re.sub('<[^>]+>',' ',item.get('content') or '')[:15000]})
+
+def scan_lever(con,uid,board):
+    validate_board(board)
+    url=f'https://api.lever.co/v0/postings/{board}?mode=json'
+    payload=board_payload(url)
+    if not isinstance(payload,list):error(502,'Unexpected Lever response')
+    return import_feed(con,uid,payload,url,lambda item:{'company':board,'title':item['text'],'url':item['hostedUrl'],'source':'lever:'+board,'location':(item.get('categories') or {}).get('location'),'description':re.sub('<[^>]+>',' ',item.get('descriptionPlain') or item.get('description') or '')[:15000]})
+
+def scan_ashby(con,uid,board):
+    validate_board(board)
+    url=f'https://api.ashbyhq.com/posting-api/job-board/{board}'
+    payload=board_payload(url)
+    if not isinstance(payload.get('jobs'),list):error(502,'Unexpected Ashby response')
+    return import_feed(con,uid,payload['jobs'],url,lambda item:{'company':board,'title':item['title'],'url':item['jobUrl'],'source':'ashby:'+board,'location':item.get('location'),'work_mode':'remote' if item.get('isRemote') is True else None,'description':re.sub('<[^>]+>',' ',item.get('descriptionPlain') or item.get('descriptionHtml') or '')[:15000]})
+
+FEED_SCANNERS={'greenhouse':scan_greenhouse,'lever':scan_lever,'ashby':scan_ashby}
 
 @app.post('/api/discovery/greenhouse')
 def discover_greenhouse(data:BoardInput,authorization:str|None=Header(None)):
     uid=user_id(authorization)
     with db() as con:return scan_greenhouse(con,uid,data.board)
 
+@app.post('/api/discovery/ats/{provider}')
+def discover_provider(provider:str,data:BoardInput,authorization:str|None=Header(None)):
+    uid=user_id(authorization)
+    if provider not in FEED_SCANNERS:error(404,'Unknown job source')
+    with db() as con:return FEED_SCANNERS[provider](con,uid,data.board)
+
 def run_discovery_for_user(uid):
     results=[]
     with db() as con:
         row=con.execute('SELECT settings FROM users WHERE id=?',(uid,)).fetchone()
         if not row:return []
-        boards=json_settings(row).get('greenhouse_boards',[])
-    for board in boards:
+        settings=json_settings(row)
+        boards=[(provider,board) for provider,key in (('greenhouse','greenhouse_boards'),('lever','lever_sites'),('ashby','ashby_boards')) for board in settings.get(key,[])]
+    for provider,board in boards:
         with db() as con:
-            run=con.execute('INSERT INTO agent_runs(user_id,agent,started_at) VALUES(?,?,?)',(uid,'greenhouse_discovery',now()))
+            run=con.execute('INSERT INTO agent_runs(user_id,agent,started_at) VALUES(?,?,?)',(uid,provider+'_discovery',now()))
             rid=run.lastrowid
         try:
             with db() as con:
-                result=scan_greenhouse(con,uid,board)
+                result=FEED_SCANNERS[provider](con,uid,board)
                 con.execute('UPDATE agent_runs SET finished_at=?,created=?,duplicates=? WHERE id=?',(now(),result['created'],result['duplicates'],rid))
-                audit(con,uid,'agent_scan_completed',board=board,created=result['created'])
-            results.append({'board':board,**result})
+                audit(con,uid,'agent_scan_completed',board=board,provider=provider,created=result['created'])
+            results.append({'provider':provider,'board':board,**result})
         except Exception as exc:
             with db() as con:con.execute('UPDATE agent_runs SET finished_at=?,error=? WHERE id=?',(now(),str(exc)[:200],rid))
-            results.append({'board':board,'error':str(exc)[:200]})
+            results.append({'provider':provider,'board':board,'error':str(exc)[:200]})
     return results
 
 @app.post('/api/discovery/run')
