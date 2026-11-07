@@ -3,6 +3,7 @@ import importlib
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 class FlowTests(unittest.TestCase):
@@ -95,5 +96,28 @@ class FlowTests(unittest.TestCase):
             os.environ.pop('ALLOW_PUBLIC_SIGNUP',None)
         result=self.client.get('/health',headers={'host':'malicious.example'})
         self.assertEqual(result.status_code,400)
+
+    def test_official_ats_feeds_and_deduplication(self):
+        token=self.send('POST','/api/auth/register',{'email':'feed@example.com','password':'sufficient-password'}).json()['token']
+        s=self.send('PUT','/api/settings',{'lever_sites':['example'], 'ashby_boards':['sample']},token)
+        self.assertEqual(s.status_code,200,s.text)
+        fixtures={
+            'lever':[{'text':'Director of Data','hostedUrl':'https://jobs.lever.co/example/one','categories':{'location':'Remote'},'descriptionPlain':'Build analytics'}],
+            'ashby':{'jobs':[{'title':'Operations Lead','jobUrl':'https://jobs.ashbyhq.com/sample/two','location':'Chicago','isRemote':False,'descriptionPlain':'Manage operations'}]},
+        }
+        def fake_payload(url):
+            return fixtures['lever' if 'lever.co' in url else 'ashby']
+        with patch.object(self.mod,'board_payload',side_effect=fake_payload):
+            first=self.send('POST','/api/discovery/run',token=token)
+            self.assertEqual(first.status_code,200,first.text)
+            self.assertEqual(sum(x.get('created',0) for x in first.json()['results']),2)
+            again=self.send('POST','/api/discovery/run',token=token)
+            self.assertEqual(sum(x.get('duplicates',0) for x in again.json()['results']),2)
+            manual=self.send('POST','/api/discovery/ats/lever',{'board':'example'},token)
+            self.assertEqual(manual.json()['created'],0)
+        self.assertEqual(len(self.send('GET','/api/jobs',token=token).json()),2)
+        self.assertEqual(self.send('POST','/api/discovery/ats/lever',{'board':'bad/board'},token).status_code,400)
+        self.assertEqual(self.send('POST','/api/discovery/ats/unknown',{'board':'sample'},token).status_code,404)
+        self.assertEqual(self.send('PUT','/api/settings',{'ashby_boards':['../notallowed']},token).status_code,400)
 
 if __name__=='__main__':unittest.main()
