@@ -1,0 +1,53 @@
+# Requires DOMAIN and a server with ports 80/443 publicly reachable.
+# Public account creation intentionally disabled until verification is implemented.
+services:
+  hq:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_PATH: /data/career-search.db
+      ALLOWED_HOSTS: ${DOMAIN:?set DOMAIN}
+      ALLOW_PUBLIC_SIGNUP: "0"
+      SECURE_HTTPS: "1"
+    volumes:
+      - hq_data:/data
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/health').read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  worker:
+    build: .
+    restart: unless-stopped
+    command: ["python", "worker.py"]
+    environment:
+      DATABASE_PATH: /data/career-search.db
+      WORKER_TZ: ${WORKER_TZ:-America/Chicago}
+      WORKER_HOUR: ${WORKER_HOUR:-8}
+    volumes:
+      - hq_data:/data
+    depends_on:
+      hq:
+        condition: service_healthy
+  caddy:
+    image: caddy:2.9
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      hq:
+        condition: service_healthy
+volumes:
+  hq_data:
+  caddy_data:
+  caddy_config:
