@@ -23,7 +23,7 @@ Caddy terminates HTTPS and manages TLS certificates when DNS and inbound ports a
 
 ## Scheduled discovery
 
-The worker runs configured Greenhouse scans daily at `WORKER_HOUR` in `WORKER_TZ`. Logs and per-user `agent_runs` record results. It never submits applications or sends recruiter messages.
+The worker runs configured Greenhouse, Lever, and Ashby employer board scans daily at `WORKER_HOUR` in `WORKER_TZ`. Logs and per-user `agent_runs` record results. It never submits applications or sends recruiter messages.
 
 ## Backups
 
