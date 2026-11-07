@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Career Search HQ — Your next move, organized</title><link rel="stylesheet" href="/static/styles.css"></head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-icon">◈</span><div><b>CAREER<span>SEARCH</span></b><small>HQ / COMMAND CENTER</small></div></div>
+    <div class="side-label">WORKSPACE</div>
+    <nav id="nav">
+      <button data-page="overview" class="active"><span>◫</span> Overview</button>
+      <button data-page="pipeline"><span>▤</span> Opportunities</button>
+      <button data-page="workbench"><span>◈</span> Application Workbench</button>
+      <button data-page="outreach"><span>◎</span> Recruiter Outreach</button>
+      <button data-page="followups"><span>◷</span> Follow-ups</button>
+      <button data-page="strategy"><span>↗</span> Strategy & Metrics</button>
+    </nav>
+    <div class="side-label">CONTROL</div>
+    <nav><button data-page="settings"><span>⚙</span> Search Criteria</button><button data-page="data"><span>⇵</span> Import / Export</button></nav>
+    <div class="side-bottom"><div class="pill"><span class="online"></span> Approval-first automation</div><small>Open source · self-hosted · your data</small><button id="logout" class="quiet">Sign out</button></div>
+  </aside>
+  <main class="main">
+    <div class="topbar"><div><span class="eyebrow">YOUR CAREER, YOUR RULES</span><h1 id="pageTitle">Command Overview</h1></div><div class="top-right"><span id="identity"></span><span class="avatar">HQ</span></div></div>
+    <div id="alert" aria-live="polite"></div>
+    <div id="app"></div>
+  </main>
+</div>
+<div id="auth" class="auth-overlay"><div class="auth-card"><div class="brand"><span class="brand-icon">◈</span><div><b>CAREER<span>SEARCH</span></b><small>HQ / COMMAND CENTER</small></div></div><h2>Your next move starts here.</h2><p>One place for smarter opportunities, stronger applications, and every follow-up.</p><form id="authForm"><label>Email<input required type="email" name="email" placeholder="you@example.com"></label><label>Password<input required type="password" name="password" minlength="12" placeholder="12+ characters"></label><button class="primary" type="submit">Create account</button><button type="button" id="authToggle" class="quiet">Already have an account? Sign in</button></form><small>Account and job data stay separate for each user.</small></div></div>
+<script defer src="/static/app.js"></script>
+</body></html>
