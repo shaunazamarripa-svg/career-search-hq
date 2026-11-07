@@ -18,13 +18,31 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Header, Response
+from fastapi import FastAPI, HTTPException, Header, Response, Request
 from fastapi.responses import FileResponse, PlainTextResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).parent
 DB_PATH = os.environ.get('DATABASE_PATH', str(ROOT / 'career-search.db'))
 app = FastAPI(title='Career Search HQ', docs_url='/api/docs', openapi_url='/api/openapi.json')
+ALLOWED_HOSTS=[x.strip() for x in os.environ.get('ALLOWED_HOSTS','localhost,127.0.0.1,testserver').split(',') if x.strip()]
+app.add_middleware(TrustedHostMiddleware,allowed_hosts=ALLOWED_HOSTS)
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self,request,call_next):
+        response=await call_next(request)
+        response.headers['X-Content-Type-Options']='nosniff'
+        response.headers['Referrer-Policy']='strict-origin-when-cross-origin'
+        response.headers['X-Frame-Options']='DENY'
+        response.headers['Permissions-Policy']='camera=(), microphone=(), geolocation=()'
+        response.headers['Content-Security-Policy']="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+        response.headers['Cache-Control']='no-store' if request.url.path.startswith('/api/') else 'no-cache'
+        if os.environ.get('SECURE_HTTPS','0')=='1':response.headers['Strict-Transport-Security']='max-age=31536000; includeSubDomains'
+        return response
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 DEFAULT_WEIGHTS = {'title':25, 'pay':20, 'location':15, 'skills':15, 'leadership':15, 'freshness':10}
 DEFAULT_SETTINGS = {'titles':[], 'min_salary':0, 'ideal_salary':0, 'work_modes':['remote','hybrid','onsite'], 'location':'', 'max_travel':100, 'exclusions':[], 'skills':[], 'greenhouse_boards':[], 'weights':DEFAULT_WEIGHTS}
@@ -67,6 +85,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS followups(id INTEGER PRIMARY KEY,user_id INTEGER NOT NULL,job_id INTEGER NOT NULL,due_at TEXT NOT NULL,kind TEXT NOT NULL,done_at TEXT,notes TEXT NOT NULL DEFAULT '',FOREIGN KEY(user_id) REFERENCES users(id),FOREIGN KEY(job_id) REFERENCES jobs(id));
         CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY,user_id INTEGER NOT NULL,job_id INTEGER,kind TEXT NOT NULL,details TEXT NOT NULL,occurred_at TEXT NOT NULL,FOREIGN KEY(user_id) REFERENCES users(id));
         CREATE TABLE IF NOT EXISTS agent_runs(id INTEGER PRIMARY KEY,user_id INTEGER NOT NULL,agent TEXT NOT NULL,started_at TEXT NOT NULL,finished_at TEXT,created INTEGER NOT NULL DEFAULT 0,duplicates INTEGER NOT NULL DEFAULT 0,error TEXT,FOREIGN KEY(user_id) REFERENCES users(id));
+        CREATE TABLE IF NOT EXISTS auth_attempts(bucket TEXT PRIMARY KEY,window_start REAL NOT NULL,attempts INTEGER NOT NULL);
         ''')
 
 init_db()
@@ -89,6 +108,14 @@ def token_for(con,uid):
     token=secrets.token_urlsafe(36)
     con.execute('INSERT INTO sessions VALUES(?,?,?)',(hashlib.sha256(token.encode()).hexdigest(),uid,time.time()+60*60*24*7))
     return token
+def throttle(con,key,limit=5,seconds=900):
+    """Persistent per-account and per-IP sliding-window approximation."""
+    current=time.time();entry=con.execute('SELECT * FROM auth_attempts WHERE bucket=?',(key,)).fetchone()
+    if not entry or current-entry['window_start']>=seconds:
+        con.execute('INSERT INTO auth_attempts(bucket,window_start,attempts) VALUES(?,?,1) ON CONFLICT(bucket) DO UPDATE SET window_start=excluded.window_start,attempts=1',(key,current))
+        return
+    if entry['attempts']>=limit:error(429,'Too many attempts. Try again later.')
+    con.execute('UPDATE auth_attempts SET attempts=attempts+1 WHERE bucket=?',(key,))
 def user_id(auth):
     if not auth or not auth.startswith('Bearer '):error(401,'Sign in required')
     token=auth[7:]
@@ -112,10 +139,12 @@ class Credentials(BaseModel):
     password:str
 
 @app.post('/api/auth/register')
-def register(data:Credentials):
+def register(data:Credentials,request:Request):
+    if os.environ.get('ALLOW_PUBLIC_SIGNUP','1')!='1':error(403,'Public registration is disabled until account verification is configured')
     email=data.email.strip().lower()
     if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+',email) or len(data.password)<12:error(400,'Valid email and password of at least 12 characters required')
     with db() as con:
+        throttle(con,'register-ip:'+str(request.client.host),limit=10,seconds=3600)
         try:
             c=con.execute('INSERT INTO users(email,password_hash,settings,created_at) VALUES(?,?,?,?)',(email,hash_password(data.password),json.dumps(DEFAULT_SETTINGS),now()))
         except sqlite3.IntegrityError:error(409,'Email already registered')
@@ -123,17 +152,53 @@ def register(data:Credentials):
     return {'token':token,'email':email}
 
 @app.post('/api/auth/login')
-def login(data:Credentials):
+def login(data:Credentials,request:Request):
+    email=data.email.strip().lower()
     with db() as con:
-        row=con.execute('SELECT * FROM users WHERE email=?',(data.email.strip().lower(),)).fetchone()
-        if not row or not verify_password(data.password,row['password_hash']):error(401,'Invalid credentials')
-        return {'token':token_for(con,row['id']),'email':row['email']}
+        throttle(con,'login-email:'+hashlib.sha256(email.encode()).hexdigest(),limit=5)
+        throttle(con,'login-ip:'+str(request.client.host),limit=30)
+    with db() as con:
+        row=con.execute('SELECT * FROM users WHERE email=?',(email,)).fetchone()
+        verified=verify_password(data.password,row['password_hash'] if row else hash_password('not-the-real-password','00'*16))
+        if not row or not verified:
+            # The separate attempt counter transaction has already committed.
+            invalid=True
+        else:
+            invalid=False
+            con.execute('DELETE FROM auth_attempts WHERE bucket=?',('login-email:'+hashlib.sha256(email.encode()).hexdigest(),))
+            token=token_for(con,row['id'])
+    if invalid:error(401,'Invalid credentials')
+    return {'token':token,'email':row['email']}
 
 @app.post('/api/auth/logout')
 def logout(authorization:str|None=Header(None)):
     uid=user_id(authorization)
     with db() as con:con.execute('DELETE FROM sessions WHERE token_hash=? AND user_id=?',(hashlib.sha256(authorization[7:].encode()).hexdigest(),uid))
     return {'ok':True}
+
+@app.post('/api/auth/revoke-all')
+def revoke_all(authorization:str|None=Header(None)):
+    uid=user_id(authorization)
+    with db() as con:
+        con.execute('DELETE FROM sessions WHERE user_id=?',(uid,))
+        audit(con,uid,'all_sessions_revoked')
+    return {'ok':True}
+
+class DeleteAccount(BaseModel):
+    password:str
+    confirm:str
+
+@app.delete('/api/account')
+def delete_account(data:DeleteAccount,authorization:str|None=Header(None)):
+    uid=user_id(authorization)
+    if data.confirm!='DELETE MY ACCOUNT':error(400,'Exact confirmation required')
+    with db() as con:
+        row=con.execute('SELECT password_hash FROM users WHERE id=?',(uid,)).fetchone()
+        if not verify_password(data.password,row['password_hash']):error(403,'Password incorrect')
+        for table in ('sessions','followups','outreach','applications','agent_runs','events','jobs'):
+            con.execute(f'DELETE FROM {table} WHERE user_id=?',(uid,))
+        con.execute('DELETE FROM users WHERE id=?',(uid,))
+    return {'deleted':True}
 
 @app.get('/api/settings')
 def get_settings(authorization:str|None=Header(None)):
@@ -492,6 +557,9 @@ def weekly_review(authorization:str|None=Header(None)):
 
 @app.get('/')
 def index():return FileResponse(ROOT/'static'/'index.html')
+
+@app.get('/health')
+def health():return {'status':'ok'}
 
 @app.get('/static/{name}')
 def static(name:str):
