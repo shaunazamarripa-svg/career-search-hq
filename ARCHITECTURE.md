@@ -2,7 +2,7 @@
 
 ## Current working implementation
 
-Web UI → FastAPI → SQLite. Each authenticated data request filters by `user_id`. An append-only event log records status changes, approvals, verified receipts, follow-ups, and discovery runs. A standalone `agent.py` imports configured Greenhouse employer boards and records outcomes. Optional local MCP tools expose account-scoped read operations and **draft-only** writes for agent assistants.
+Web UI → FastAPI → SQLite. Each authenticated data request filters by `user_id`. An append-only event log records status changes, approvals, verified receipts, follow-ups, and discovery runs. A standalone `agent.py` imports configured Greenhouse, Lever, and Ashby public employer boards and records outcomes. Optional local MCP tools expose account-scoped read operations and **draft-only** writes for agent assistants.
 
 ## Workflow state machine
 
