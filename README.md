@@ -24,7 +24,7 @@ uvicorn app:app --reload --port 8080
 
 Visit http://localhost:8080. Or use `docker compose up --build` for self-hosting.
 
-For internet deployment, put it behind HTTPS, set up managed backups and monitoring, and configure an email-verification/password-reset provider before inviting strangers. The included authentication is an MVP, not a commercially audited identity stack.
+For an HTTPS pilot, see [DEPLOYMENT.md](DEPLOYMENT.md) and `compose.production.yaml`. That deployment disables open registration; pilot users are provisioned by an operator. It includes login throttling, security headers, session revocation and account deletion, but it is still not a commercially audited identity stack. Configure verification and account recovery before inviting strangers.
 
 ## Product boundaries
 
@@ -86,7 +86,7 @@ MIT license. Self-hosted source can be copied and sold subject to the license no
 
 ## Planned extensions
 
-1. Production identity and password recovery; encrypted credential vault and background worker.
+1. Production identity verification and password recovery; encrypted credential vault and managed backup/restore.
 2. ATS-specific adapters with receipt verification and failure tracking.
 3. Authenticated inbox sync; opt-in recruiter search and separate outreach confirmation.
 4. Editable resume/cover-letter artifacts and versioned evidence bank.
